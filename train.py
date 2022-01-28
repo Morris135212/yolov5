@@ -32,10 +32,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD, Adam, AdamW, lr_scheduler
 from tqdm import tqdm
 
+# Obtain the path of current py file
 FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]  # YOLOv5 root directory
+# YOLOv5 root directory
+ROOT = FILE.parents[0]
+# add ROOT to PATH
 if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))  # add ROOT to PATH
+    sys.path.append(str(ROOT))
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import val  # for end-of-epoch mAP
@@ -72,17 +75,21 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze
 
     # Directories
+    # weight directory will take the newest file under runs/train
+    # If got folders exp1, exp2, then take the latest one
     w = save_dir / 'weights'  # weights dir
     (w.parent if evolve else w).mkdir(parents=True, exist_ok=True)  # make dir
+    # Take the best and last checkpoints
     last, best = w / 'last.pt', w / 'best.pt'
 
     # Hyperparameters
     if isinstance(hyp, str):
         with open(hyp, errors='ignore') as f:
-            hyp = yaml.safe_load(f)  # load hyps dict
+            hyp = yaml.safe_load(f)  # load hyps dict, load hyper parameters
     LOGGER.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
 
     # Save run settings
+    # Whether to save the latest parameters including hyper parameters and all configures
     if not evolve:
         with open(save_dir / 'hyp.yaml', 'w') as f:
             yaml.safe_dump(hyp, f, sort_keys=False)
@@ -92,6 +99,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     # Loggers
     data_dict = None
     if RANK in [-1, 0]:
+        # Register for logger
         loggers = Loggers(save_dir, weights, opt, hyp, LOGGER)  # loggers instance
         if loggers.wandb:
             data_dict = loggers.wandb.data_dict
@@ -106,12 +114,19 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     plots = not evolve  # create plots
     cuda = device.type != 'cpu'
     init_seeds(1 + RANK)
+    # setting for training if got multiple GPU
     with torch_distributed_zero_first(LOCAL_RANK):
         data_dict = data_dict or check_dataset(data)  # check if None
+
+    # Path that possess the training root and validation root
     train_path, val_path = data_dict['train'], data_dict['val']
     nc = 1 if single_cls else int(data_dict['nc'])  # number of classes
-    names = ['item'] if single_cls and len(data_dict['names']) != 1 else data_dict['names']  # class names
-    assert len(names) == nc, f'{len(names)} names found for nc={nc} dataset in {data}'  # check
+
+    # class names
+    names = ['item'] if single_cls and len(data_dict['names']) != 1 else data_dict['names']
+    # checks for matching between class names and nc
+    assert len(names) == nc, f'{len(names)} names found for nc={nc} dataset in {data}'
+
     is_coco = isinstance(val_path, str) and val_path.endswith('coco/val2017.txt')  # COCO dataset
 
     # Model
@@ -120,7 +135,9 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     if pretrained:
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(weights)  # download if not found locally
-        ckpt = torch.load(weights, map_location=device)  # load checkpoint
+        # load checkpoint
+        ckpt = torch.load(weights, map_location=device)
+        # Model settings
         model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
         exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys
         csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
@@ -130,7 +147,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     else:
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
 
-    # Freeze
+    # Freeze some parameters, making them not involve in parameter upgrade
     freeze = [f'model.{x}.' for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # layers to freeze
     for k, v in model.named_parameters():
         v.requires_grad = True  # train all layers
@@ -154,6 +171,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     LOGGER.info(f"Scaled weight_decay = {hyp['weight_decay']}")
 
     g0, g1, g2 = [], [], []  # optimizer parameter groups
+    # Separate the module into 3 groups with different setting on gradient descent
     for v in model.modules():
         if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):  # bias
             g2.append(v.bias)
@@ -182,7 +200,10 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         lf = one_cycle(1, hyp['lrf'], epochs)  # cosine 1->hyp['lrf']
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)  # plot_lr_scheduler(optimizer, scheduler, epochs)
 
-    # EMA
+    # EMA, exponential moving average
+    # This can be easily expressed as:
+    # If we got [theta_0, theta_1, theta_2,....theta_n]
+    # EMA: v(t) = beta*v(t-1)+(1-beta)*theta_t, and v(t) will be the parameters of the whole model
     ema = ModelEMA(model) if RANK in [-1, 0] else None
 
     # Resume
@@ -212,6 +233,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     if cuda and RANK == -1 and torch.cuda.device_count() > 1:
         LOGGER.warning('WARNING: DP not recommended, use torch.distributed.run for best DDP Multi-GPU results.\n'
                        'See Multi-GPU Tutorial at https://github.com/ultralytics/yolov5/issues/475 to get started.')
+        # Parallel training
         model = torch.nn.DataParallel(model)
 
     # SyncBatchNorm
@@ -270,11 +292,15 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     nw = max(round(hyp['warmup_epochs'] * nb), 1000)  # number of warmup iterations, max(3 epochs, 1k iterations)
     # nw = min(nw, (epochs - start_epoch) / 2 * nb)  # limit warmup to < 1/2 of training
     last_opt_step = -1
-    maps = np.zeros(nc)  # mAP per class
-    results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
+    # mAP per class
+    maps = np.zeros(nc)
+    # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
+    results = (0, 0, 0, 0, 0, 0, 0)
     scheduler.last_epoch = start_epoch - 1  # do not move
     scaler = amp.GradScaler(enabled=cuda)
+    # Apply early stop
     stopper = EarlyStopping(patience=opt.patience)
+
     compute_loss = ComputeLoss(model)  # init loss class
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
                 f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
@@ -285,8 +311,10 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
 
         # Update image weights (optional, single-GPU only)
         if opt.image_weights:
-            cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # class weights
-            iw = labels_to_image_weights(dataset.labels, nc=nc, class_weights=cw)  # image weights
+            # class weight
+            cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc
+            # image weights
+            iw = labels_to_image_weights(dataset.labels, nc=nc, class_weights=cw)
             dataset.indices = random.choices(range(dataset.n), weights=iw, k=dataset.n)  # rand weighted idx
 
         # Update mosaic border (optional)
