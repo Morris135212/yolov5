@@ -24,7 +24,7 @@ from utils.torch_utils import select_device, time_sync
 
 
 @torch.no_grad()
-def infer(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
+def live_infer(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
         project=ROOT / 'runs/detect',  # save results to project/name
         name='exp',
@@ -39,7 +39,6 @@ def infer(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                            path=weights,
                            source='local')
     save_dir = increment_path(Path(project) / name, exist_ok=False)  # increment run
-    save_dir.mkdir(parents=True, exist_ok=True)  # make dir
     if source:
         v_cap = cv2.VideoCapture(source)  # initialize the video capture
     else:
@@ -50,33 +49,69 @@ def infer(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
     video_dims = imgsz  # define output dimensions
     out = cv2.VideoWriter(f"{save_dir}", fourcc, fps, video_dims)  # initialize video writer
     frame_count = 0  # initialize frame count
+    try:
+        while True:
+            frame_count += 1  # increment frame count
+            success, frame = v_cap.read()  # read frame from video
+            if not success:
+                # raise Exception("Video Initialization error")
+                break
+            if frame_count % detect_interval == 0:
+                # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # convert raw frame from BGR to RGB
+                # img = torch.from_numpy(frame).to(device, dtype=torch.float)
+                # img = img / 255
+                # if len(img.shape) == 3:
+                #     img = img.unsqueeze(0)  # expand for batch dim
+                # pred = model(img)
+                cv2.imwrite(save_dir / "tmp.png", frame)
+                output = model(save_dir / "tmp.png")
+                xyxy = output.pandas().xyxy[0]
+                if save_crop:
+                    output.crop()
+                for i, row in xyxy.iterrows():
+                    xmin, ymin, xmax, ymax = row["xmin"], row["ymin"], row["xmax"], row["ymax"]
+                    frame = cv2.rectangle(frame, (int(xmin), int(ymin)), (int(xmax), int(ymax)), (255, 0, 0), line_thickness)
 
-    while True:
-        frame_count += 1  # increment frame count
-        success, frame = v_cap.read()  # read frame from video
-        if not success:
-            raise Exception("Video Initialization error")
-        if frame_count % detect_interval == 0:
-            # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # convert raw frame from BGR to RGB
-            # img = torch.from_numpy(frame).to(device, dtype=torch.float)
-            # img = img / 255
-            # if len(img.shape) == 3:
-            #     img = img.unsqueeze(0)  # expand for batch dim
-            # pred = model(img)
-            cv2.imwrite(save_dir / "tmp.png", frame)
-            output = model(save_dir / "tmp.png")
-            xyxy = output.pandas().xyxy[0]
-            if save_crop:
-                output.crop()
-            for i, row in xyxy.iterrows():
-                xmin, ymin, xmax, ymax = row["xmin"], row["ymin"], row["xmax"], row["ymax"]
-                frame = cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (255, 0, 0), line_thickness)
+            out.write(frame)  # write detected frame to output video
+            if vis:
+                frame_array = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame = Image.fromarray(frame_array)
+                display(frame)
+        v_cap.release()
+        out.release()
+    except KeyboardInterrupt:
+        v_cap.release()
+        out.release()
 
-        out.write(frame)  # write detected frame to output video
-        if vis:
-            frame_array = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = Image.fromarray(frame_array)
-            display(frame)
+
+@torch.no_grad()
+def infer(model,
+          img_path,
+          line_thickness=3,
+          project=ROOT / 'runs/detect',  # save results to project/name
+          name='exp',
+          imgname="tmp.png",
+          exist_ok=True,
+          vis=True,
+          save=True):
+    save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
+
+    output = model(img_path)
+    xyxy = output.pandas().xyxy[0]
+    frame = cv2.imread(img_path)
+
+    for i, row in xyxy.iterrows():
+        xmin, ymin, xmax, ymax = row["xmin"], row["ymin"], row["xmax"], row["ymax"]
+        frame = cv2.rectangle(frame, (int(xmin), int(ymin)), (int(xmax), int(ymax)), (255, 0, 0), line_thickness)
+
+    if vis:
+        frame_array = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(frame_array)
+        display(img)
+    if save:
+        save_path = str(save_dir / imgname)
+        print(save_path)
+        cv2.imwrite(save_path, frame)
 
 
 
