@@ -2,7 +2,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
-
+import numpy as np
 import IPython
 import cv2
 import torch
@@ -18,13 +18,11 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
-
-from utils.datasets import IMG_FORMATS, VID_FORMATS, LoadImages, LoadStreams
-from utils.general import (LOGGER, check_file, check_img_size, check_imshow, check_requirements, colorstr,
-                           increment_path, non_max_suppression, print_args, scale_coords, strip_optimizer, xyxy2xywh)
+from utils.datasets import LoadImages
+from utils.general import (check_img_size, increment_path, non_max_suppression, scale_coords)
 from utils.plots import Annotator, colors, save_one_box
 
-DATA_SHAPE = (640, 640)
+DATA_SHAPE = (416, 416)
 DEFAULT_TRANSFORMS = T.Compose([
     T.Resize(DATA_SHAPE),
     T.ToTensor()
@@ -33,15 +31,15 @@ DEFAULT_TRANSFORMS = T.Compose([
 
 @torch.no_grad()
 def live_infer_hub(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
-        source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
-        project=ROOT / 'runs/detect',  # save results to project/name
-        name='exp',
-        detect_interval=1,
-        imgsz=(640, 640),  # inference size (height, width)
-        vis=False,
-        save_crop=False,  # save cropped prediction boxes
-        line_thickness=3
-        ):
+                   source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
+                   project=ROOT / 'runs/detect',  # save results to project/name
+                   name='exp',
+                   detect_interval=1,
+                   imgsz=(640, 640),  # inference size (height, width)
+                   vis=False,
+                   save_crop=False,  # save cropped prediction boxes
+                   line_thickness=3
+                   ):
     model = torch.hub.load(str(ROOT),
                            'custom',
                            path=weights,
@@ -78,7 +76,8 @@ def live_infer_hub(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                     output.crop()
                 for i, row in xyxy.iterrows():
                     xmin, ymin, xmax, ymax = row["xmin"], row["ymin"], row["xmax"], row["ymax"]
-                    frame = cv2.rectangle(frame, (int(xmin), int(ymin)), (int(xmax), int(ymax)), (255, 0, 0), line_thickness)
+                    frame = cv2.rectangle(frame, (int(xmin), int(ymin)), (int(xmax), int(ymax)), (255, 0, 0),
+                                          line_thickness)
 
             out.write(frame)  # write detected frame to output video
             if vis:
@@ -124,17 +123,17 @@ def infer(model,
 
 @torch.no_grad()
 def live_inference(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
-        source=0,  # file/dir/URL/glob, 0 for webcam
-        data=ROOT / 'data/coco128.yaml',  # dataset.yaml path
-        imgsz=(416, 416),  # inference size (height, width)
-        detect_interval=1,
-        detect=True,
-        project=ROOT / 'runs/detect',  # save results to project/name
-        name='exp',  # save results to project/name
-        exist_ok=True,  # existing project/name ok, do not increment
-        half=False,  # use FP16 half-precision inference
-        **kwargs
-        ):
+                   source=0,  # file/dir/URL/glob, 0 for webcam
+                   data=ROOT / 'data/coco128.yaml',  # dataset.yaml path
+                   imgsz=(416, 416),  # inference size (height, width)
+                   detect_interval=1,
+                   detect=True,
+                   project=ROOT / 'runs/detect',  # save results to project/name
+                   name='exp',  # save results to project/name
+                   exist_ok=True,  # existing project/name ok, do not increment
+                   half=False,  # use FP16 half-precision inference
+                   **kwargs
+                   ):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = DetectMultiBackend(weights, device=device, data=data)
     # Load model
@@ -148,13 +147,13 @@ def live_inference(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         v_cap = cv2.VideoCapture(0)
 
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
-    fourcc = cv2.VideoWriter_fourcc(*'VP90')  # define encoding type
-    # fourcc = cv2.VideoWriter_fourcc('m', 'p', '4', 'v')
-    # fourcc = cv2.VideoWriter_fourcc(*'mpeg')
-    fps = 30.0  # define frame rate
-    video_dims = imgsz  # define output dimensions
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # define encoding type
+    size = (int(v_cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            int(v_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+    fps = 20.0
     video_out_path = str(save_dir / "tmp.mp4")
-    out = cv2.VideoWriter(f"{video_out_path}", fourcc, fps, video_dims)  # initialize video writer
+    out = cv2.VideoWriter(video_out_path, fourcc, fps, size)  # initialize video writer
+
     frame_count = 0  # initialize frame count
     try:
         while True:
@@ -166,23 +165,24 @@ def live_inference(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
             if frame_count % detect_interval == 0:
                 save_path = str(save_dir / "tmp.png")
                 cv2.imwrite(save_path, frame)
-                out.write(frame)  # write detected frame to output video
                 if detect:
-                    run(model,
-                        device=device,
-                        source=save_dir / "tmp.png",
-                        imgsz=imgsz,
-                        project=project,
-                        name=name,
-                        exist_ok=exist_ok,
-                        half=half,
-                        **kwargs
-                        )
+                    frame = run(model,
+                                device=device,
+                                source=save_dir / "tmp.png",
+                                imgsz=imgsz,
+                                project=project,
+                                name=name,
+                                exist_ok=exist_ok,
+                                half=half,
+                                **kwargs
+                                )
+                    out.write(frame)
         v_cap.release()
         out.release()
     except KeyboardInterrupt:
         v_cap.release()
         out.release()
+        print("Detect Finish")
 
 
 @torch.no_grad()
@@ -217,7 +217,6 @@ def run(model,  # model.pt path(s)
 
     # Load model
     stride, names, pt, jit, onnx, engine = model.stride, model.names, model.pt, model.jit, model.onnx, model.engine
-
 
     # Half
     half &= (pt or jit or onnx or engine) and device.type != 'cpu'  # FP16 supported on limited backends with CUDA
